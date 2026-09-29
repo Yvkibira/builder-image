@@ -14,12 +14,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libgbm1 libpango-1.0-0 libcairo2 libasound2 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN npm install -g pnpm@9.15.0
 
 WORKDIR /opt/builder-image
 COPY package.json /opt/builder-image/package.json
 RUN npm install --omit=dev \
-    && npx playwright install --with-deps chromium
+    && npx playwright install --with-deps --only-shell chromium
 COPY verify.mjs /opt/builder-image/verify.mjs
 
 WORKDIR /workspace
