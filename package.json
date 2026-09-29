@@ -1,0 +1,10 @@
+{
+  "name": "builder-image",
+  "private": true,
+  "type": "module",
+  "description": "Headless browser checks.",
+  "dependencies": {
+    "@axe-core/playwright": "^4.10.2",
+    "playwright": "1.63.0"
+  }
+}
