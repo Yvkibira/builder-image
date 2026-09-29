@@ -21,6 +21,11 @@ jobs:
             - name: Checkout
               uses: actions/checkout@v4
 
+            # Registry names must be lowercase, but the owner may not be.
+            - name: Set image name
+              id: image
+              run: echo "name=ghcr.io/$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')/builder-image" >> "$GITHUB_OUTPUT"
+
             - name: Set up Buildx
               uses: docker/setup-buildx-action@v3
 
@@ -38,7 +43,7 @@ jobs:
                   file: ./Dockerfile
                   push: true
                   tags: |
-                      ghcr.io/${{ github.repository_owner }}/builder-image:latest
-                      ghcr.io/${{ github.repository_owner }}/builder-image:${{ github.sha }}
+                      ${{ steps.image.outputs.name }}:latest
+                      ${{ steps.image.outputs.name }}:${{ github.sha }}
                   cache-from: type=gha
                   cache-to: type=gha,mode=max
