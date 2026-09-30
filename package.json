@@ -1,10 +1,22 @@
 {
-  "name": "builder-image",
+  "name": "my-site",
   "private": true,
+  "version": "0.0.0",
   "type": "module",
-  "description": "Headless browser checks.",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
   "dependencies": {
-    "@axe-core/playwright": "^4.10.2",
-    "playwright": "1.63.0"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.17",
+    "vite": "^6.0.7"
   }
 }
