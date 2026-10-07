@@ -16,13 +16,27 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN npm install -g pnpm@9.15.0
 
+# The site checker and its dependencies live in /opt/builder-image and use their
+# own manifest, so installing Playwright here never ends up in a project's
+# /workspace build. `npx playwright install` only downloads the browser binary —
+# the `playwright` module itself has to be a real dependency for verify.mjs to
+# import it, which is why it is declared in tools-package.json.
 WORKDIR /opt/builder-image
-COPY package.json /opt/builder-image/package.json
+COPY tools-package.json /opt/builder-image/package.json
 RUN npm install --omit=dev \
     && npx playwright install --with-deps --only-shell chromium
 COPY verify.mjs /opt/builder-image/verify.mjs
 
 WORKDIR /workspace
+
+COPY index.html /workspace/index.html
+COPY package.json /workspace/package.json
+COPY vite.config.js /workspace/vite.config.js
+COPY tailwind.config.js /workspace/tailwind.config.js
+COPY postcss.config.js /workspace/postcss.config.js
+COPY src/main.jsx /workspace/src/main.jsx
+COPY src/App.jsx /workspace/src/App.jsx
+COPY src/index.css /workspace/src/index.css
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh

@@ -1,0 +1,11 @@
+{
+  "name": "builder-checks",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Dependencies for the pre-publish site checker that ships in this image (/opt/builder-image/verify.mjs). Kept separate from the site's own package.json so installing the checker never adds Playwright to a project's own build.",
+  "dependencies": {
+    "@axe-core/playwright": "^4.13.0",
+    "playwright": "^1.63.0"
+  }
+}

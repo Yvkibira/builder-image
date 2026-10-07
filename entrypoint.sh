@@ -3,18 +3,14 @@ set -euo pipefail
 
 cd /workspace
 
-while [ ! -f package.json ]; do
-  sleep 2
-done
-
 if [ ! -d node_modules ]; then
   pnpm install --prefer-offline --no-frozen-lockfile || npm install --no-audit --no-fund
 fi
 
 if [ -n "${PREVIEW_HOST:-}" ]; then
-  # Allow the site's own preview host and any host under the platform deploy
-  # domain (a leading dot matches subdomains), so the studio's preview host is
-  # never rejected by Vite's "Blocked request. This host is not allowed." check.
+  # Allow the project's own preview host and any sibling host under the same
+  # parent domain (leading dot), so a preview URL is not rejected by Vite's
+  # host check with a bare 403.
   parent=".${PREVIEW_HOST#*.}"
   export __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS="${PREVIEW_HOST},${parent}"
 fi
