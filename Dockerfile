@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.4
-FROM node:22-bookworm-slim
+FROM node:22.23.4-bookworm-slim
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
@@ -40,6 +40,13 @@ COPY src/index.css /workspace/src/index.css
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# The dev server, installs and the site checker all run unprivileged: agent-
+# authored package.json scripts must not execute as root. /ms-playwright stays
+# world-readable (no chown needed); /pnpm is pnpm's store/home.
+RUN mkdir -p /pnpm \
+    && chown -R node:node /workspace /opt/builder-image /pnpm
+USER node
 
 EXPOSE 3000
 

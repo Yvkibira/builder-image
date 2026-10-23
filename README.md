@@ -15,9 +15,10 @@ docker build -t builder-image .
 docker run --rm -p 3000:3000 builder-image
 ```
 
-The entrypoint waits for `/workspace/package.json`, installs dependencies with
-pnpm (falling back to npm), then runs `npm run dev` on port 3000. Set
-`PREVIEW_HOST` to allow that host in Vite.
+The entrypoint installs dependencies with pnpm (falling back to npm) whenever
+`package.json` changed since the last install (tracked via a marker inside
+`node_modules`), then runs `npm run dev` on port 3000. Set `PREVIEW_HOST` to
+allow that host in Vite. The container runs as the unprivileged `node` user.
 
 ## The site check
 
