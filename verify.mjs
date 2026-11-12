@@ -26,7 +26,7 @@
 
 import { chromium } from 'playwright';
 import { AxeBuilder } from '@axe-core/playwright';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { extname, join } from 'node:path';
 
 const BLOCK = 'block';
@@ -126,7 +126,12 @@ const REGISTRY = {
   75: ['security', BLOCK, 'No mixed content'],
   76: ['security', SKIP, 'Content Security Policy headers'],
   77: ['security', WARN, 'No raw user input rendered as HTML'],
+  80: ['layout', WARN, 'No text painted over other text'],
   78: ['security', WARN, 'User input is sanitised before rendering'],
+  // A child that leaves its card is invisible to every other check: the
+  // document does not scroll (#1), nothing is clipped (#3), and no structural
+  // region overlaps (#2) — yet the page visibly shows content outside its box.
+  79: ['layout', BLOCK, 'Elements stay inside their cards'],
   // axe-core catches WCAG rules that hand-written heuristics miss, and there is
   // no other place for them to run.
   900: ['a11y', BLOCK, 'No serious or critical axe-core violations'],
@@ -317,6 +322,52 @@ function installHelpers() {
   const visibleInteractives = () =>
     Array.from(document.querySelectorAll(window.__sk.interactiveSelector)).filter(isVisible);
 
+  // 79 — a statically positioned element whose box leaves its card. Absolutely
+  // or fixed positioned boxes escape on purpose (decorative glows and blobs),
+  // so they are skipped, as is anything an ancestor already clips from view.
+  const cardEscapes = () => {
+    const out = [];
+    const containers = 'article, .card, .card-body';
+
+    for (const element of Array.from(document.querySelectorAll('body *'))) {
+      if (!isVisible(element)) continue;
+
+      const style = getComputedStyle(element);
+      if ('absolute' === style.position || 'fixed' === style.position) continue;
+      if ('none' !== style.transform) continue;
+
+      const container = element.closest(containers);
+      if (!container || container === element) continue;
+
+      let clipped = false;
+      for (let node = element; node; node = node.parentElement) {
+        const ancestor = getComputedStyle(node);
+        if ('visible' !== ancestor.overflowX || 'visible' !== ancestor.overflowY) {
+          clipped = true;
+          break;
+        }
+        if (node === container) break;
+      }
+      if (clipped) continue;
+
+      const rect = element.getBoundingClientRect();
+      const bounds = container.getBoundingClientRect();
+      const escape = Math.max(
+        bounds.left - rect.left,
+        rect.right - bounds.right,
+        bounds.top - rect.top,
+        rect.bottom - bounds.bottom,
+      );
+
+      // 2px absorbs sub-pixel rounding without hiding a real spill.
+      if (escape > 2) {
+        out.push(`${describe(element)} leaves ${describe(container)} by ${Math.round(escape)}px`);
+      }
+    }
+
+    return out;
+  };
+
   window.__sk = {
     interactiveSelector,
     parseColor,
@@ -329,6 +380,7 @@ function installHelpers() {
     inSentence,
     textElements,
     visibleInteractives,
+    cardEscapes,
   };
 }
 
@@ -489,6 +541,7 @@ async function passDesktop(page, report, meta) {
       hasBreadcrumb: false,
       insecureResources: [],
       rawHrefProtocols: [],
+      cardEscapes: [],
     };
 
     // 8 / 13 — body text contrast under the active colour scheme.
@@ -884,6 +937,8 @@ async function passDesktop(page, report, meta) {
       }
     }
 
+    out.cardEscapes = sk.cardEscapes();
+
     return out;
   });
 
@@ -923,6 +978,7 @@ async function passDesktop(page, report, meta) {
   report.add(25, found.frames.length === 0, found.frames.slice(0, MAX_OFFENDERS).join('; '), where);
   report.add(26, found.scrollables.length === 0, found.scrollables.slice(0, MAX_OFFENDERS).join('; '), where);
   report.add(28, 0 === found.duplicateIds.length, Array.from(new Set(found.duplicateIds)).slice(0, MAX_OFFENDERS).join('; '), where);
+  report.add(79, 0 === found.cardEscapes.length, found.cardEscapes.slice(0, MAX_OFFENDERS).join('; '), where);
   report.add(29, '' !== found.lang, `html lang="${found.lang}"`, where);
   report.add(30, 0 === found.placeholderText.length, found.placeholderText.join('; '), where);
   report.add(31, Object.keys(found.fontFamilies).length <= 3 && Object.keys(found.fontSizes).length <= 14, `${Object.keys(found.fontFamilies).length} font families, ${Object.keys(found.fontSizes).length} size/weight combinations`, where);
@@ -1028,6 +1084,7 @@ async function passLayout(page, report, meta, viewport) {
       clientWidth: document.documentElement.clientWidth,
       clipped: [],
       overlapping: [],
+      overlappingText: [],
       oversizedImages: [],
       smallTargets: [],
       fixedWidth: [],
@@ -1042,7 +1099,7 @@ async function passLayout(page, report, meta, viewport) {
         /truncate|line-clamp|no-scrollbar/.test(className);
 
       // 3 — clipped by an overflow:hidden box that does not look deliberate.
-      if ('hidden' === style.overflow && !intentional) {
+      if (('hidden' === style.overflow || 'clip' === style.overflow) && !intentional) {
         if (element.scrollWidth > element.clientWidth + 2 || element.scrollHeight > element.clientHeight + 2) {
           out.clipped.push(sk.describe(element));
         }
@@ -1053,6 +1110,67 @@ async function passLayout(page, report, meta, viewport) {
         out.fixedWidth.push(`${sk.describe(element)} is fixed at ${style.width}`);
       }
     }
+
+    // 80 — text painted over other text. Structural overlap (check 2) only
+    // compares header/main/footer/nav, so a negative margin on an inline span
+    // ("shika" + "-ml-1.5 cloud") or a heading spilling out of a fixed-height
+    // box collides glyph-on-glyph and passes every other rule. Measured from
+    // the text ranges' own line boxes: element boxes are far larger than the
+    // glyphs and would flag ordinary neighbours.
+    const glyphs = [];
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+
+    while (walker.nextNode() && glyphs.length < 600) {
+      const node = walker.currentNode;
+
+      if (!node.textContent || !node.textContent.trim()) continue;
+
+      const element = node.parentElement;
+      if (!element || !sk.isVisible(element)) continue;
+
+      const style = getComputedStyle(element);
+      const className = typeof element.className === 'string' ? element.className : '';
+
+      if ('hidden' === style.visibility || 0 === Number(style.opacity)) continue;
+      if (/sr-only|visually-hidden|screen-reader/.test(className)) continue;
+
+      const range = document.createRange();
+      range.selectNodeContents(node);
+
+      for (const rect of range.getClientRects()) {
+        if (rect.width < 4 || rect.height < 4) continue;
+        glyphs.push({ element, rect });
+      }
+    }
+
+    for (let i = 0; i < glyphs.length; i += 1) {
+      for (let j = i + 1; j < glyphs.length; j += 1) {
+        const a = glyphs[i];
+        const b = glyphs[j];
+
+        // Nested elements are judged too: a negative margin on an inline span
+        // inside a heading is the common way two words collide. Text ranges
+        // cover only their own glyphs, so ordinary parent/child text does not
+        // produce an overlap unless it really is painted on top.
+        if (a.element === b.element) continue;
+
+        const overlapX = Math.max(0, Math.min(a.rect.right, b.rect.right) - Math.max(a.rect.left, b.rect.left));
+        const overlapY = Math.max(0, Math.min(a.rect.bottom, b.rect.bottom) - Math.max(a.rect.top, b.rect.top));
+
+        if (overlapX < 2 || overlapY < 2) continue;
+
+        const smaller = Math.min(a.rect.width * a.rect.height, b.rect.width * b.rect.height);
+        // A single colliding glyph pair is small, so this is a tenth of the
+        // smaller box rather than a quarter: a negative margin that pulls one
+        // word onto another only ever overlaps by a few pixels.
+        if (overlapX * overlapY < smaller * 0.1) continue;
+
+        out.overlappingText.push(`${sk.describe(a.element)} over ${sk.describe(b.element)}`);
+        break;
+      }
+    }
+
+    out.overlappingText = Array.from(new Set(out.overlappingText)).slice(0, 10);
 
     // 2 — overlapping structural regions (the previous checker's rule, kept).
     const regions = ['header', 'main', 'footer', 'nav'].flatMap((selector) =>
@@ -1105,6 +1223,8 @@ async function passLayout(page, report, meta, viewport) {
       out.smallTargets.push(`${sk.describe(element)} is ${Math.round(rect.width)}x${Math.round(rect.height)}`);
     }
 
+    out.cardEscapes = sk.cardEscapes();
+
     return out;
   });
 
@@ -1123,6 +1243,9 @@ async function passLayout(page, report, meta, viewport) {
     report.add(5, 0 === found.fixedWidth.length, found.fixedWidth.slice(0, MAX_OFFENDERS).join('; '), where);
     report.add(6, 0 === found.smallTargets.length, found.smallTargets.slice(0, MAX_OFFENDERS).join('; '), where);
   }
+
+  report.add(80, 0 === found.overlappingText.length, found.overlappingText.slice(0, MAX_OFFENDERS).join('; '), where);
+  report.add(79, 0 === found.cardEscapes.length, found.cardEscapes.slice(0, MAX_OFFENDERS).join('; '), where);
 }
 
 /** 12 — contrast with a dark colour scheme forced on. */
@@ -1484,6 +1607,89 @@ const workspaceRoot = process.env.SITE_CHECK_WORKSPACE || '/workspace';
 const deadline = Date.now() + budgetSeconds * 1000;
 
 const report = new Report();
+/**
+ * One address per page. `/about/` and `/about` are the same page, and so are
+ * the bare origin and `/` — crawling both made the page count wrong and made
+ * the unique-title check compare the home page against itself.
+ */
+function pageKey(address) {
+  try {
+    const url = new URL(address);
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    return url.origin + path;
+  } catch {
+    return address;
+  }
+}
+
+/**
+ * What the build plan says should exist, so a half-built site reports progress
+ * instead of a silent shortfall. Purely informational: missing pages never
+ * block, because a site may legitimately be published before every planned
+ * page is written.
+ */
+function readPlan(workspaceRoot) {
+  const planPath = join(workspaceRoot, '.builder', 'plan.json');
+
+  if (existsSync(planPath)) {
+    try {
+      const plan = JSON.parse(readFileSync(planPath, 'utf8'));
+      const pages = Array.isArray(plan.pages) ? plan.pages : [];
+
+      return {
+        source: 'plan.json',
+        pages: pages.map((page) => ({
+          name: String(page?.name || ''),
+          path: String(page?.path || '/'),
+          status: String(page?.status || 'todo'),
+        })),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  const todoPath = join(workspaceRoot, '.builder', 'todo.md');
+
+  if (existsSync(todoPath)) {
+    try {
+      const lines = readFileSync(todoPath, 'utf8').split('\n');
+      const items = lines.filter((line) => /^\s*-\s*\[( |x|~)\]/i.test(line));
+
+      if (items.length > 0) {
+        return {
+          source: 'todo.md',
+          pages: items.map((line) => ({
+            name: line.replace(/^\s*-\s*\[[^\]]*\]\s*/, '').trim(),
+            path: '',
+            status: /\[x\]/i.test(line) ? 'done' : 'todo',
+          })),
+        };
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function planProgress(plan, pages) {
+  const crawled = new Set(pages.map((page) => page.path));
+  const planned = plan.pages;
+  const done = planned.filter((page) => page.status === 'done');
+  const missing = planned
+    .filter((page) => page.path !== '' && page.status !== 'done' && !crawled.has(page.path))
+    .map((page) => `${page.name} (${page.path})`);
+
+  return {
+    source: plan.source,
+    planned: planned.length,
+    done: done.length,
+    missing,
+  };
+}
+
 const pages = [];
 const linkStatus = new Map();
 let truncated = false;
@@ -1496,6 +1702,7 @@ try {
 
   const queue = [entryUrl];
   const seen = new Set();
+  const queued = new Set([pageKey(entryUrl)]);
 
   while (queue.length > 0) {
     if (Date.now() > deadline) {
@@ -1504,8 +1711,12 @@ try {
     }
 
     const url = queue.shift();
-    if (seen.has(url)) continue;
-    seen.add(url);
+    // Compare normalised addresses: the entry url arrives without a trailing
+    // slash and a nav link to "/" resolves with one, which crawled the home
+    // page twice and then failed the unique-title check against itself.
+    const key = pageKey(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
 
     const page = await crawlPage(browser, entryUrl, url, report);
     pages.push(page);
@@ -1513,7 +1724,9 @@ try {
     for (const link of page.internalUrls) {
       const resolved = new URL(link);
       if (resolved.hash) continue;
-      if (seen.has(link) || queue.includes(link)) continue;
+      const linkKey = pageKey(link);
+      if (seen.has(linkKey) || queued.has(linkKey)) continue;
+      queued.add(linkKey);
       queue.push(link);
     }
   }
@@ -1556,8 +1769,10 @@ if (0 < report.checkerErrors.length) {
 }
 
 const summary = report.summary();
+const plan = readPlan(workspaceRoot);
 const output = {
   ok: 0 === summary.blocking,
+  plan: plan === null ? null : planProgress(plan, pages),
   entry: entryUrl,
   truncated,
   pages: pages.map((page) => ({

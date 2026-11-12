@@ -1,0 +1,204 @@
+#!/usr/bin/env node
+//
+// Install one approved package into /workspace.
+//
+// The builder refuses arbitrary npm installs: the allowlist at
+// /opt/shika/packages.json is the capability contract, and it ships with the
+// image so it can never drift from the runtime it was pinned against. This
+// script is the only sanctioned way to change a project's dependencies.
+//
+// Usage:
+//   shika-add                    list the approved packages (JSON)
+//   shika-add <name>             install name at its approved version
+//
+// Prints one JSON object on stdout. Exit 0 on success, 1 on failure, 2 on a
+// refused request. The caller (an MCP tool or the studio agent) reads the JSON;
+// it is never meant to be parsed by a human.
+
+'use strict';
+
+const { execFileSync } = require('node:child_process');
+const { existsSync, readFileSync, statfsSync, writeFileSync } = require('node:fs');
+const { join } = require('node:path');
+
+const CATALOGUE = '/opt/shika/packages.json';
+const WORKSPACE = '/workspace';
+
+function reply(payload, code) {
+  process.stdout.write(JSON.stringify(payload) + '\n');
+  process.exit(code);
+}
+
+function loadCatalogue() {
+  if (!existsSync(CATALOGUE)) {
+    reply({ ok: false, error: 'missing_catalogue', message: 'The package catalogue is not installed in this image.' }, 1);
+  }
+
+  try {
+    return JSON.parse(readFileSync(CATALOGUE, 'utf8'));
+  } catch (error) {
+    reply({ ok: false, error: 'invalid_catalogue', message: String(error.message || error) }, 1);
+  }
+}
+
+function freeMb() {
+  try {
+    const stats = statfsSync(WORKSPACE);
+    return Math.floor((stats.bavail * stats.bsize) / (1024 * 1024));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The version actually installed, read from the package itself.
+ */
+function resolvedVersion(name) {
+  const manifest = join(WORKSPACE, 'node_modules', name, 'package.json');
+
+  if (!existsSync(manifest)) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(readFileSync(manifest, 'utf8')).version || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `--save-exact` does not strip a range that was passed in the spec, so the
+ * manifest kept `^4.1.0` after installing 4.1.3. Rewrite the entry to the
+ * version that is on disk: the workspace has to be reproducible from its own
+ * manifest, not only from the lockfile.
+ */
+function pinExact(name, version) {
+  const manifestPath = join(WORKSPACE, 'package.json');
+
+  if (!existsSync(manifestPath)) {
+    return;
+  }
+
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'));
+
+    for (const group of ['dependencies', 'devDependencies']) {
+      if (manifest[group] && manifest[group][name]) {
+        manifest[group][name] = version;
+      }
+    }
+
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  } catch {
+    // A manifest we cannot parse is not worth failing an install over; the
+    // package is on disk and the lockfile still records what landed.
+  }
+}
+
+function installedVersion(name) {
+  const manifest = join(WORKSPACE, 'package.json');
+
+  if (!existsSync(manifest)) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(manifest, 'utf8'));
+
+    return (parsed.dependencies && parsed.dependencies[name]) || null;
+  } catch {
+    return null;
+  }
+}
+
+const catalogue = loadCatalogue();
+const packages = Array.isArray(catalogue.packages) ? catalogue.packages : [];
+const name = (process.argv[2] || '').trim();
+
+if (name === '') {
+  reply({
+    ok: true,
+    packages: packages.map((entry) => ({
+      name: entry.name,
+      version: entry.version,
+      weight: entry.weight,
+      why: entry.why,
+    })),
+  }, 0);
+}
+
+const approved = packages.find((entry) => entry.name === name);
+
+if (!approved) {
+  reply({
+    ok: false,
+    error: 'not_allowed',
+    message: `${name} is not on the approved list. Build the feature with the installed packages, or tell the user which package would be needed and why.`,
+    allowed: packages.map((entry) => entry.name),
+  }, 2);
+}
+
+const already = installedVersion(name);
+
+if (already !== null) {
+  reply({ ok: true, name, version: already, status: 'already_installed' }, 0);
+}
+
+const requiredMb = Number(catalogue.min_free_mb || 500);
+const free = freeMb();
+
+if (free !== null && free < requiredMb) {
+  reply({
+    ok: false,
+    error: 'low_disk',
+    message: `Only ${free} MB free in the workspace; ${requiredMb} MB is required before installing ${name}.`,
+  }, 1);
+}
+
+const timeoutMs = Number(catalogue.timeout_seconds || 120) * 1000;
+const started = Date.now();
+
+try {
+  const output = execFileSync(
+    'pnpm',
+    ['add', `${name}@${approved.version}`, '--save-exact', '--ignore-scripts', '--reporter=silent'],
+    {
+      cwd: WORKSPACE,
+      timeout: timeoutMs,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, CI: 'true' },
+    },
+  );
+
+  const resolved = resolvedVersion(name);
+
+  if (resolved !== null) {
+    pinExact(name, resolved);
+  }
+
+  reply({
+    ok: true,
+    name,
+    version: resolved,
+    status: 'installed',
+    ms: Date.now() - started,
+    // Truncated: an install log can be long, and the caller only needs the
+    // failure reason when there is one.
+    output: String(output || '').trim().slice(-1200),
+  }, 0);
+} catch (error) {
+  const detail = [error.stderr, error.stdout, error.message]
+    .filter((part) => typeof part === 'string' && part.trim() !== '')
+    .join('\n')
+    .trim();
+
+  reply({
+    ok: false,
+    error: error.killed ? 'timeout' : 'install_failed',
+    message: `Could not install ${name}@${approved.version}.`,
+    detail: detail.slice(-1200),
+    ms: Date.now() - started,
+  }, 1);
+}

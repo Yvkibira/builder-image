@@ -5,7 +5,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
-    PORT=3000
+    PORT=3000 \
+    npm_config_store_dir=/pnpm/store
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
       git curl ca-certificates unzip zip bash \
@@ -29,23 +30,49 @@ COPY verify.mjs /opt/builder-image/verify.mjs
 
 WORKDIR /workspace
 
-COPY index.html /workspace/index.html
+# The site's runtime is installed here, once, instead of on the first request of
+# every container: React, Vite and Tailwind plus the router, the icon set and the
+# component toolkit. `node_modules/.shika-deps` records the manifest hash that
+# entrypoint.sh compares against, so a boot with an untouched package.json skips
+# `pnpm install` entirely. The store stays in /pnpm so an on-demand
+# `shika-add` can install without downloading the common case.
 COPY package.json /workspace/package.json
+RUN pnpm install --no-frozen-lockfile \
+    && sha256sum package.json | cut -d' ' -f1 > node_modules/.shika-deps
+
+COPY index.html /workspace/index.html
 COPY vite.config.js /workspace/vite.config.js
-COPY tailwind.config.js /workspace/tailwind.config.js
-COPY postcss.config.js /workspace/postcss.config.js
 COPY src/main.jsx /workspace/src/main.jsx
 COPY src/App.jsx /workspace/src/App.jsx
 COPY src/index.css /workspace/src/index.css
+COPY src/lib/utils.js /workspace/src/lib/utils.js
+
+# The component catalogue and the two add-tools. Components are copied into a
+# project on demand — no registry fetch and no shadcn CLI — so an agent with no
+# terminal can still build a real interface out of real controls.
+COPY packages.json /opt/shika/packages.json
+COPY shika-add /usr/local/bin/shika-add
+COPY shika-add-component /usr/local/bin/shika-add-component
+COPY ui/accordion.jsx /opt/shika/ui/accordion.jsx
+COPY ui/alert.jsx /opt/shika/ui/alert.jsx
+COPY ui/badge.jsx /opt/shika/ui/badge.jsx
+COPY ui/button.jsx /opt/shika/ui/button.jsx
+COPY ui/card.jsx /opt/shika/ui/card.jsx
+COPY ui/dialog.jsx /opt/shika/ui/dialog.jsx
+COPY ui/input.jsx /opt/shika/ui/input.jsx
+COPY ui/label.jsx /opt/shika/ui/label.jsx
+COPY ui/separator.jsx /opt/shika/ui/separator.jsx
+COPY ui/tabs.jsx /opt/shika/ui/tabs.jsx
+COPY ui/textarea.jsx /opt/shika/ui/textarea.jsx
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/shika-add /usr/local/bin/shika-add-component
 
 # The dev server, installs and the site checker all run unprivileged: agent-
 # authored package.json scripts must not execute as root. /ms-playwright stays
 # world-readable (no chown needed); /pnpm is pnpm's store/home.
 RUN mkdir -p /pnpm \
-    && chown -R node:node /workspace /opt/builder-image /pnpm
+    && chown -R node:node /workspace /opt/builder-image /opt/shika /pnpm
 USER node
 
 EXPOSE 3000

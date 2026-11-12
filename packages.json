@@ -1,0 +1,67 @@
+{
+  "comment": "Packages the builder may install on demand. Anything not listed here is refused: an open `pnpm add` is an unpinned supply chain, an unpredictable disk footprint and a way to break a build with a package that wants a native toolchain. Keep entries to pure-JS, browser-side packages. `weight` is a guide for the caller: heavy entries add build time and disk, so a site should justify them.",
+  "min_free_mb": 500,
+  "timeout_seconds": 120,
+  "packages": [
+    {
+      "name": "motion",
+      "version": "^11.11.0",
+      "weight": "medium",
+      "why": "Animation (the framer-motion successor). Use only when the design asks for movement."
+    },
+    {
+      "name": "embla-carousel-react",
+      "version": "^8.3.0",
+      "weight": "light",
+      "why": "Testimonial, gallery and hero carousels."
+    },
+    {
+      "name": "date-fns",
+      "version": "^4.1.0",
+      "weight": "light",
+      "why": "Formatting dates on news, events and opening-hours pages."
+    },
+    {
+      "name": "dayjs",
+      "version": "^1.11.0",
+      "weight": "light",
+      "why": "Smaller alternative to date-fns when only formatting is needed."
+    },
+    {
+      "name": "@heroicons/react",
+      "version": "^2.1.0",
+      "weight": "light",
+      "why": "Alternative icon set when lucide-react does not have the right glyph."
+    },
+    {
+      "name": "@headlessui/react",
+      "version": "^2.1.0",
+      "weight": "medium",
+      "why": "Accessible menus, comboboxes and transitions without Radix."
+    },
+    {
+      "name": "sonner",
+      "version": "^1.7.0",
+      "weight": "light",
+      "why": "Toast notifications for form submissions."
+    },
+    {
+      "name": "leaflet",
+      "version": "^1.9.4",
+      "weight": "heavy",
+      "why": "Embedded maps. Needs react-leaflet with it and a tile source."
+    },
+    {
+      "name": "react-leaflet",
+      "version": "^4.2.1",
+      "weight": "heavy",
+      "why": "React bindings for leaflet. Requires leaflet."
+    },
+    {
+      "name": "recharts",
+      "version": "^2.13.0",
+      "weight": "heavy",
+      "why": "Charts for a page that genuinely shows data. Pulls d3 modules."
+    }
+  ]
+}

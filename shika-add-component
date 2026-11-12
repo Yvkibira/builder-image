@@ -1,0 +1,90 @@
+#!/usr/bin/env node
+//
+// Copy one component from the baked catalogue into the project.
+//
+// The components in /opt/shika/ui are generated once, at build time, from a
+// pinned shadcn version, as JavaScript with relative imports. Copying a file is
+// deterministic and needs no network, no shadcn CLI and no shell access beyond
+// this script — which is what lets an agent without a terminal build a real
+// interface instead of hand-rolling every control.
+//
+// Usage:
+//   shika-add-component                     list the catalogue (JSON)
+//   shika-add-component <name> [<name>...]  copy those components in
+//   shika-add-component <name> --force      overwrite a file the site edited
+//
+// Prints one JSON object on stdout.
+
+'use strict';
+
+const { copyFileSync, existsSync, mkdirSync, readdirSync } = require('node:fs');
+const { join, basename } = require('node:path');
+
+const CATALOGUE_DIR = '/opt/shika/ui';
+const DEST_DIR = '/workspace/src/components/ui';
+
+function reply(payload, code) {
+  process.stdout.write(JSON.stringify(payload) + '\n');
+  process.exit(code);
+}
+
+function available() {
+  if (!existsSync(CATALOGUE_DIR)) {
+    return [];
+  }
+
+  return readdirSync(CATALOGUE_DIR)
+    .filter((file) => file.endsWith('.jsx'))
+    .map((file) => basename(file, '.jsx'))
+    .sort();
+}
+
+const args = process.argv.slice(2);
+const force = args.includes('--force');
+const names = args.filter((arg) => arg !== '--force');
+const catalogue = available();
+
+if (names.length === 0) {
+  reply({ ok: true, components: catalogue, destination: DEST_DIR }, 0);
+}
+
+const unknown = names.filter((name) => !catalogue.includes(name));
+
+if (unknown.length > 0) {
+  reply({
+    ok: false,
+    error: 'unknown_component',
+    message: `${unknown.join(', ')} is not in the catalogue.`,
+    components: catalogue,
+  }, 2);
+}
+
+mkdirSync(DEST_DIR, { recursive: true });
+
+const copied = [];
+const skipped = [];
+
+for (const name of names) {
+  const source = join(CATALOGUE_DIR, `${name}.jsx`);
+  const destination = join(DEST_DIR, `${name}.jsx`);
+
+  if (existsSync(destination) && !force) {
+    skipped.push(name);
+    continue;
+  }
+
+  copyFileSync(source, destination);
+  copied.push(`src/components/ui/${name}.jsx`);
+}
+
+// The components import `../../lib/utils`, which the starter project already
+// ships. Fail loudly if a container was emptied of it, so the import error does
+// not surface later as a blank preview.
+const utils = '/workspace/src/lib/utils.js';
+
+reply({
+  ok: true,
+  copied,
+  skipped,
+  ...(existsSync(utils) ? {} : { warning: 'src/lib/utils.js is missing; the copied components will not import.' }),
+}, 0);
