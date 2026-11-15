@@ -50,12 +50,14 @@ git sha) on push, on the weekly schedule, or manually.
 
 The AI Builder panel does **not** build a per-session Dockerfile. It creates each
 preview as a Coolify application from
-`ghcr.io/<owner>/builder-image:latest`, and refuses to start one on a node whose
-local copy does not match the panel's templates (checker, entrypoint, starter).
+`ghcr.io/<owner>/builder-image:latest`. When a node's copy is missing or differs
+from the panel's templates (checker, entrypoint, starter), the panel pulls the
+latest publish and uses it — a panel/registry skew is a release note, not a
+blocker. Only a node with no image at all fails.
 
 After a publish, run `php artisan builder:pull-image` on the fleet. A node that
-still has the old image is reported by `builder:image-status`, and previews fail
-with a retryable message until it is updated.
+still has the old image is reported by `builder:image-status` for follow-up; the
+next preview pulls it automatically.
 
 `builder:build-image` can build the same image locally on a node from the
 panel's vendored copy. That local build is the offline/self-hosted fallback as
