@@ -46,6 +46,22 @@ Environment overrides: `SITE_CHECK_BUDGET_SECONDS` (default 240) and
 The workflow builds and pushes `ghcr.io/<owner>/builder-image` (`latest` plus the
 git sha) on push, on the weekly schedule, or manually.
 
+## How the panel uses this image
+
+The AI Builder panel does **not** build a per-session Dockerfile. It creates each
+preview as a Coolify application from
+`ghcr.io/<owner>/builder-image:latest`, and refuses to start one on a node whose
+local copy does not match the panel's templates (checker, entrypoint, starter).
+
+After a publish, run `php artisan builder:pull-image` on the fleet. A node that
+still has the old image is reported by `builder:image-status`, and previews fail
+with a retryable message until it is updated.
+
+`builder:build-image` can build the same image locally on a node from the
+panel's vendored copy. That local build is the offline/self-hosted fallback as
+the fleet expands; a self-hosted registry is the planned next step, with Docker
+Hub as a second mirror.
+
 ## Files
 
 - `Dockerfile`
