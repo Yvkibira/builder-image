@@ -1324,10 +1324,33 @@ async function passAxe(page, report, meta) {
 
     const serious = violations.filter((violation) => ['critical', 'serious'].includes(violation.impact));
 
+    // Name the failing elements, not just the rule: the agent can only fix a
+    // contrast violation it can find. Targets and a short failure summary
+    // point straight at the node — the difference between a two-step fix and
+    // a turn-long hunt through the source.
+    const detail = serious
+      .slice(0, MAX_OFFENDERS)
+      .map((violation) => {
+        const nodes = violation.nodes
+          .slice(0, 4)
+          .map((node) => {
+            const target = Array.isArray(node.target) ? node.target.filter(Boolean).join(' ') : String(node.target ?? '');
+            const why = (node.failureSummary || node.html || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+
+            return `${target || '(node)'}${why ? ' — ' + why : ''}`;
+          })
+          .join(' ; ');
+
+        return `${violation.id} (${violation.nodes.length}): ${nodes}`;
+      })
+      .join(' | ');
+
     report.add(
       900,
       0 === serious.length,
-      serious.slice(0, MAX_OFFENDERS).map((violation) => `${violation.id} (${violation.nodes.length})`).join(', '),
+      0 === serious.length
+        ? ''
+        : detail,
       meta.path,
     );
   } catch (error) {
