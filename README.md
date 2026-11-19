@@ -1,7 +1,9 @@
 # builder-image
 
-Node 22 + pnpm + Playwright/Chromium. Serves a project's Vite dev server on port
-3000 and ships a pre-publish site checker.
+Node 22 + pnpm + Playwright/Chromium + OpenCode. Serves a project's Vite dev
+server on port 3000 and ships a pre-publish site checker. With
+`OPENCODE_ENABLED=1` it also runs the OpenCode HTTP server on loopback for the
+panel's builder runtime.
 
 ## Build
 
@@ -19,6 +21,28 @@ The entrypoint installs dependencies with pnpm (falling back to npm) whenever
 `package.json` changed since the last install (tracked via a marker inside
 `node_modules`), then runs `npm run dev` on port 3000. Set `PREVIEW_HOST` to
 allow that host in Vite. The container runs as the unprivileged `node` user.
+
+## OpenCode
+
+Set `OPENCODE_ENABLED=1` to start `opencode serve` on `127.0.0.1:4096` next to
+Vite. The port is not published: the panel reaches it through the same
+`docker exec` channel the builder tools use.
+
+- `OPENCODE_PASSWORD` is required when enabled; the server uses it for Basic auth.
+- `SHIKA_LLM_BASE_URL` points the DeepSeek provider at the panel's LLM gateway.
+- `SHIKA_LLM_TOKEN` is the per-session credential. `DEEPSEEK_API_KEY` also works
+  for a direct local run.
+- `OPENCODE_SERVER_PORT` overrides the loopback port (default 4096).
+
+The global config lives at `~/.config/opencode/opencode.json`. It pins
+`deepseek/deepseek-flash`, disables self-update, and denies the free `opencode`
+provider so a turn cannot silently fall back to it.
+
+The entrypoint drops `OPENCODE_PASSWORD`, `SHIKA_LLM_TOKEN` and
+`DEEPSEEK_API_KEY` from the environment before starting Vite, so the dev server
+and the site code do not inherit the credential. The OpenCode process still
+holds it; a separate Unix user for the server is the next hardening step if
+agent-authored site code is treated as hostile.
 
 ## The site check
 
@@ -68,6 +92,7 @@ Hub as a second mirror.
 
 - `Dockerfile`
 - `entrypoint.sh`
+- `opencode.json` — OpenCode global config: pinned model, self-update off, free provider denied.
 - `package.json` — the starter a project is built from.
 - `tools-package.json` — dependencies for the site checker only, installed into `/opt/builder-image` so
   Playwright never lands in a project's own build.
