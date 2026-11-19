@@ -1,21 +1,26 @@
 # syntax=docker/dockerfile:1.4
-FROM node:22.23.4-bookworm-slim
+FROM node:22.23.5-bookworm-slim
+
+ARG OPENCODE_VERSION=2.3.2
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH \
     PORT=3000 \
-    npm_config_store_dir=/pnpm/store
+    npm_config_store_dir=/pnpm/store \
+    OPENCODE_ENABLED=0 \
+    OPENCODE_SERVER_PORT=4096
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      git curl ca-certificates unzip zip bash \
+      git curl ca-certificates unzip zip bash procps \
       libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libcups2 libdrm2 \
       libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
       libgbm1 libpango-1.0-0 libcairo2 libasound2 fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g pnpm@9.15.0
+RUN npm install -g pnpm@9.15.9 \
+    && npm install -g @opencode/cli@${OPENCODE_VERSION}
 
 # The site checker and its dependencies live in /opt/builder-image and use their
 # own manifest, so installing Playwright here never ends up in a project's
@@ -64,6 +69,14 @@ COPY ui/label.jsx /opt/shika/ui/label.jsx
 COPY ui/separator.jsx /opt/shika/ui/separator.jsx
 COPY ui/tabs.jsx /opt/shika/ui/tabs.jsx
 COPY ui/textarea.jsx /opt/shika/ui/textarea.jsx
+
+# OpenCode's global config. The model is pinned, self-update is off, and the
+# free OpenCode provider is denied so a turn can never silently fall back to it.
+# The DeepSeek provider reads the panel's per-session token and, when set,
+# SHIKA_LLM_BASE_URL points it at the panel's LLM gateway.
+COPY opencode.json /home/node/.config/opencode/opencode.json
+RUN mkdir -p /home/node/.local/share/opencode \
+    && chown -R node:node /home/node/.config /home/node/.local
 
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/shika-add /usr/local/bin/shika-add-component
